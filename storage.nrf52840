@@ -1,0 +1,134 @@
+/* storage.c - KNoT Thing Storage handler */
+
+/*
+ * Copyright (c) 2018, CESAR. All rights reserved.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <settings/settings.h>
+
+/* Storage path identifiers */
+#define KNOT_SETTINGS_NAME	"knot"
+#define PATH_SEPARATOR		"/"
+
+#define CREDENTIALS_KEY		"cred"
+#define LOAD_CREDENTIALS_KEY	CREDENTIALS_KEY
+#define SAVE_CREDENTIALS_KEY	KNOT_SETTINGS_NAME PATH_SEPARATOR CREDENTIALS_KEY
+
+static struct storage_app_settings cred; /* Struct buffer */
+static const struct storage_app_settings empty_cred; /* Empty buffer */
+
+static bool cred_loaded; /* Loaded values flags */
+
+static int set(int argc, char **argv, void *value_ctx)
+{
+	int len;
+	int rc;
+
+	if (argc != 1)
+		return -ENOENT;
+
+	/* Ignore invalid key */
+	if (strcmp(argv[0], LOAD_CREDENTIALS_KEY)) {
+		/* Unknown parameter */
+		return -ENOENT;
+	}
+
+	/* Get values from storage */
+	len = sizeof(cred);
+	rc = settings_val_read_cb(value_ctx, &cred, len);
+
+	/* Read failed */
+	if (rc < 0){
+		cred_loaded = false;
+		return rc;
+	}
+
+	/* Check if empty */
+	if (memcmp(&cred, &empty_cred, len))
+		cred_loaded = true;
+	else
+		cred_loaded = false;
+
+
+	return 0;
+}
+
+static int commit(void)
+{
+	if (cred_loaded)
+		LOG_DBG("KNoT credentials found");
+	else
+		LOG_DBG("KNoT credentials not found");
+
+	return 0;
+}
+
+static struct settings_handler cred_handler = {
+	.name = KNOT_SETTINGS_NAME,
+	.h_set = set,
+	.h_commit = commit,
+};
+
+int8_t storage_init(void)
+{
+	int err;
+
+	cred_loaded = false;
+
+	LOG_DBG("Initializing Storage Settings");
+	err = settings_subsys_init();
+	if (err) {
+		LOG_ERR("Settings subsys init failed (err %d)", err);
+		return err;
+	}
+
+	LOG_DBG("Register settings handler");
+	err = settings_register(&cred_handler);
+	if (err) {
+		LOG_ERR("Settings register failed (err %d)", err);
+		return err;
+	}
+
+	LOG_DBG("Loading stored credentials");
+	err = settings_load();
+	if (err) {
+		LOG_ERR("Settings load failed (err %d)", err);
+		return err;
+	}
+
+	return 0;
+}
+
+int8_t storage_reset(void)
+{
+	/* Clear app credentials */
+	return storage_set(&empty_cred);
+}
+
+int8_t storage_get(struct storage_app_settings *dest)
+{
+	if (!cred_loaded)
+		return -ESRCH; // Item not stored
+
+	/* Write value on destination */
+	memcpy(dest, &cred, sizeof(cred));
+	return 0;
+}
+
+int8_t storage_set(const struct storage_app_settings *src)
+{
+	int len = sizeof(cred);
+
+	/* Cast to (void *) due to lack of const identifier on value argument */
+	int err = settings_save_one(SAVE_CREDENTIALS_KEY, (void *) src, len);
+	if (err) {
+		LOG_ERR("Credentials not saved");
+		return err;
+	}
+
+	memcpy(&cred, src, len);
+	cred_loaded = true;
+	return 0;
+}
